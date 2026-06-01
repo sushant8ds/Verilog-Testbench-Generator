@@ -12,40 +12,16 @@ class PromptBuilder:
     """Constructs structured prompts for LLM-based testbench generation."""
 
     def _determine_test_strategy(self, module_info: ModuleInfo) -> str:
-        """
-        Determine the appropriate test strategy based on module characteristics.
-
-        Args:
-            module_info: Parsed module information
-
-        Returns:
-            Test strategy text to include in the LLM prompt
-        """
-        lines = []
-
-        if module_info.total_input_bits <= 10:
-            lines.append(
-                f"Generate EXHAUSTIVE test cases covering all 2^{module_info.total_input_bits} "
-                f"input combinations ({2 ** module_info.total_input_bits} total test vectors)."
-            )
-        else:
-            lines.append(
-                "Generate REPRESENTATIVE test cases including edge cases "
-                f"(total input bits = {module_info.total_input_bits}, exhaustive coverage not feasible)."
-            )
-
-        # Standard patterns always included
-        lines.append("Include the following standard test patterns:")
-        lines.append("  - All-zeros: set all inputs to 0")
-        lines.append("  - All-ones: set all inputs to their maximum value")
-        lines.append("  - Boundary values: minimum and maximum value for each input port individually")
-        lines.append("  - Alternating bit patterns: e.g., 10101010 and 01010101")
-
-        # Sequential-specific additions
+        lines = ["Include these test patterns:"]
+        lines.append("  - All-zeros, all-ones, boundary values, alternating bits (0xAA, 0x55)")
         if module_info.logic_type == LogicType.SEQUENTIAL:
-            lines.append("  - Reset behavior: assert reset signal and verify outputs go to known state")
-            lines.append("  - Multi-cycle sequences: apply sequences of inputs across multiple clock cycles")
-
+            lines.append("  - Assert reset, verify outputs go to known state")
+            lines.append("  - Apply 3-5 representative input sequences across clock cycles")
+        else:
+            if module_info.total_input_bits <= 8:
+                lines.append(f"  - Exhaustive: all {2**module_info.total_input_bits} input combinations")
+            else:
+                lines.append("  - Representative edge cases (exhaustive not feasible)")
         return "\n".join(lines)
 
     def build_prompt(self, module_info: ModuleInfo) -> str:
@@ -83,40 +59,22 @@ class PromptBuilder:
 
         # --- REQUIREMENTS section ---
         req_lines = [
-            "REQUIREMENTS:",
-            f'1. Create a testbench module named "tb_{module_info.module_name}"',
-            "2. Include a `timescale directive at the top (e.g., `timescale 1ns/1ps)",
-            "3. Declare all input ports as reg type signals",
-            "4. Declare all output ports as wire type signals",
-            f"5. Instantiate the DUT ({module_info.module_name}) with correct named port mapping",
+            "REQUIREMENTS (follow exactly):",
+            f'1. Testbench module name: "tb_{module_info.module_name}"',
+            "2. Start with `timescale 1ns/1ps",
+            "3. Inputs as reg, outputs as wire",
+            f"4. Instantiate {module_info.module_name} with named port mapping",
         ]
 
-        req_num = 6
+        req_num = 5
         if module_info.logic_type == LogicType.SEQUENTIAL:
-            req_lines.append(
-                f"{req_num}. Include clock generation logic using an always block "
-                "(e.g., always #5 clk = ~clk; for a 10ns period)"
-            )
-            req_num += 1
-            req_lines.append(
-                f"{req_num}. Initialize the clock signal to 0 in the initial block before starting tests"
-            )
+            req_lines.append(f"{req_num}. Clock gen: always #5 clk = ~clk; initialize clk=0")
             req_num += 1
 
         req_lines += [
-            f"{req_num}. Include an initial block containing all test case execution logic",
-            f"{req_num + 1}. Use $display statements to show input and output values for each test case",
-            f"{req_num + 2}. Use $monitor to track signal changes throughout simulation",
-            f"{req_num + 3}. Add inline comments indicating expected output values for each test case",
-            f"{req_num + 4}. End the simulation with a $finish statement",
-            f"{req_num + 5}. Use consistent indentation (2 or 4 spaces per level)",
-            f"{req_num + 6}. Include a comment block at the top describing the test strategy used",
+            f"{req_num}. initial block with test cases, $display for each, $finish at end",
+            f"{req_num+1}. Output ONLY Verilog — no markdown, no explanations outside comments",
         ]
-
-        if module_info.logic_type == LogicType.SEQUENTIAL:
-            req_lines.append(
-                f"{req_num + 7}. Include appropriate @(posedge clk) or #delay statements between test cases"
-            )
 
         requirements_section = "\n".join(req_lines)
 

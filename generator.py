@@ -35,8 +35,8 @@ class TestbenchGenerator:
         self.use_local = use_local
         self.demo_mode = demo_mode
         self.model = "gpt-3.5-turbo"
-        self.temperature = 0.2
-        self.max_tokens = 2000
+        self.temperature = 0.1
+        self.max_tokens = 1200
 
         # Initialize OpenAI client
         if not use_local and not demo_mode:
@@ -95,22 +95,66 @@ class TestbenchGenerator:
                 f"OpenAI API call failed ({error_type}): {e}"
             ) from e
 
-    def _call_local_llm(self, prompt: str, endpoint_url: str) -> str:
+    def _call_local_llm(self, prompt: str, endpoint_url: str = "http://localhost:11434") -> str:
         """
-        Stub method for future local LLM support.
+        Call a local Ollama LLM endpoint.
 
         Args:
             prompt: The prompt to send
-            endpoint_url: URL of the local LLM endpoint
+            endpoint_url: Base URL of the Ollama server (default: http://localhost:11434)
+
+        Returns:
+            Response content string from the LLM
 
         Raises:
-            NotImplementedError: Always, as this is a stub for future implementation
+            GenerationError: If the API call fails
         """
-        raise NotImplementedError(
-            "Local LLM support is not yet implemented. "
-            "To use a local LLM, configure an endpoint URL and implement this method. "
-            "Compatible services include Ollama (https://ollama.ai) and LM Studio."
+        import urllib.request
+        import json
+
+        model = getattr(self, 'ollama_model', 'llama3.2')
+        logger.info(f"Calling Ollama API (model={model}, endpoint={endpoint_url})")
+
+        payload = json.dumps({
+            "model": model,
+            "prompt": (
+                "You are a Verilog testbench generation expert. "
+                "Output only pure Verilog code.\n\n" + prompt
+            ),
+            "stream": False,
+            "options": {
+                "num_predict": 800,
+                "temperature": 0.1,
+                "top_p": 0.9,
+            }
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{endpoint_url}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
         )
+
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                content = result.get("response", "")
+                logger.info("Ollama API call succeeded")
+                return content
+        except Exception as e:
+            error_type = type(e).__name__
+            logger.error(f"Ollama API call failed: {error_type}: {e}")
+            msg = str(e)
+            if "404" in msg:
+                raise GenerationError(
+                    f"Model '{model}' not found in Ollama. "
+                    f"Run: ollama pull {model}"
+                ) from e
+            raise GenerationError(
+                f"Ollama API call failed ({error_type}): {e}. "
+                "Make sure Ollama is running: run 'ollama serve' in a terminal."
+            ) from e
 
     def _extract_verilog_code(self, response: str) -> str:
         """
@@ -220,7 +264,8 @@ class TestbenchGenerator:
             try:
                 # Call the appropriate API
                 if self.use_local:
-                    response = self._call_local_llm(current_prompt, endpoint_url="")
+                    endpoint = getattr(self, 'ollama_url', 'http://localhost:11434')
+                    response = self._call_local_llm(current_prompt, endpoint_url=endpoint)
                 else:
                     response = self._call_openai_api(current_prompt, module_name)
 
